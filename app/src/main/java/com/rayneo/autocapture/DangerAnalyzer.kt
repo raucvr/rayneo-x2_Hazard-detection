@@ -25,10 +25,8 @@ class DangerAnalyzer(private val apiKey: String) {
         private const val MODEL = "google/gemini-2.0-flash-001"
     }
 
-    // 自定义 DNS 解析器，使用 Google DNS 绕过系统 DNS 问题
+    // 自定义 DNS 解析器，绕过系统 DNS 问题
     private val customDns = object : Dns {
-        private val googleDns = InetAddress.getByName("8.8.8.8")
-
         override fun lookup(hostname: String): List<InetAddress> {
             return try {
                 // 首先尝试系统 DNS
@@ -115,8 +113,7 @@ class DangerAnalyzer(private val apiKey: String) {
             )
 
         } catch (e: Exception) {
-            Log.e(TAG, "Analysis failed: ${e.javaClass.simpleName}: ${e.message}")
-            e.printStackTrace()
+            Log.e(TAG, "Analysis failed: ${e.javaClass.simpleName}: ${e.message}", e)
             return@withContext AnalysisResult(
                 isDanger = false,
                 error = e.message

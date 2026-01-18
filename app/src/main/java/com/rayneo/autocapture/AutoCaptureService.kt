@@ -26,6 +26,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -76,6 +77,7 @@ class AutoCaptureService : Service() {
     private var alertManager: AlertManager? = null
     private var lastCapturedBytes: ByteArray? = null
     private val captureComplete = Object()
+    private var cameraExecutor: ExecutorService? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -391,11 +393,16 @@ class AutoCaptureService : Service() {
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
             }
 
+            // Reuse executor to prevent resource leak
+            if (cameraExecutor == null || cameraExecutor!!.isShutdown) {
+                cameraExecutor = Executors.newSingleThreadExecutor()
+            }
+
             val outputConfig = OutputConfiguration(imageReader!!.surface)
             val sessionConfig = SessionConfiguration(
                 SessionConfiguration.SESSION_REGULAR,
                 listOf(outputConfig),
-                Executors.newSingleThreadExecutor(),
+                cameraExecutor!!,
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
                         Log.i(TAG, "Capture session configured")
@@ -492,6 +499,8 @@ class AutoCaptureService : Service() {
             cameraDevice = null
             imageReader?.close()
             imageReader = null
+            cameraExecutor?.shutdown()
+            cameraExecutor = null
             Log.i(TAG, "Camera closed")
         } catch (e: Exception) {
             Log.e(TAG, "Error closing camera", e)
