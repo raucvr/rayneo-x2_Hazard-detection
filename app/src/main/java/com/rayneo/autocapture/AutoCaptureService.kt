@@ -179,8 +179,7 @@ class AutoCaptureService : Service() {
         continuousMode.set(true)
         ConfigManager.setEnabled(this, true)
 
-        val interval = ConfigManager.getInterval(this)
-        Log.i(TAG, "Starting continuous analysis with interval: ${interval}s")
+        Log.i(TAG, "Starting continuous analysis (no interval delay)")
 
         analyzerJob = CoroutineScope(Dispatchers.IO).launch {
             // 等待相机准备好
@@ -221,8 +220,7 @@ class AutoCaptureService : Service() {
                         }
                     }
 
-                    // 4. 等待间隔
-                    delay(interval * 1000L)
+                    // 无额外间隔，立即进入下一轮分析
 
                 } catch (e: CancellationException) {
                     Log.i(TAG, "Analysis loop cancelled")
@@ -426,27 +424,62 @@ class AutoCaptureService : Service() {
     }
 
     /**
-     * 将 YUV 图像转换为 JPEG 字节数组
+     * 将 YUV_420_888 图像转换为 JPEG 字节数组
+     * 正确处理 rowStride 和 pixelStride，生成 NV21 格式
      */
     private fun yuvImageToJpegBytes(image: Image): ByteArray? {
         try {
+            val width = image.width
+            val height = image.height
             val planes = image.planes
-            val yBuffer = planes[0].buffer
-            val uBuffer = planes[1].buffer
-            val vBuffer = planes[2].buffer
 
-            val ySize = yBuffer.remaining()
-            val uSize = uBuffer.remaining()
-            val vSize = vBuffer.remaining()
+            // Y plane
+            val yPlane = planes[0]
+            val yBuffer = yPlane.buffer
+            val yRowStride = yPlane.rowStride
 
-            val nv21 = ByteArray(ySize + uSize + vSize)
-            yBuffer.get(nv21, 0, ySize)
-            vBuffer.get(nv21, ySize, vSize)
-            uBuffer.get(nv21, ySize + vSize, uSize)
+            // U and V planes
+            val uPlane = planes[1]
+            val vPlane = planes[2]
+            val uBuffer = uPlane.buffer
+            val vBuffer = vPlane.buffer
+            val uvRowStride = uPlane.rowStride
+            val uvPixelStride = uPlane.pixelStride
 
-            val yuvImage = YuvImage(nv21, ImageFormat.NV21, image.width, image.height, null)
+            // NV21 格式: Y plane + 交错的 VU plane
+            val nv21 = ByteArray(width * height * 3 / 2)
+
+            // 复制 Y plane，处理 rowStride
+            var pos = 0
+            if (yRowStride == width) {
+                // 无 padding，直接复制
+                yBuffer.get(nv21, 0, width * height)
+                pos = width * height
+            } else {
+                // 有 padding，逐行复制
+                for (row in 0 until height) {
+                    yBuffer.position(row * yRowStride)
+                    yBuffer.get(nv21, pos, width)
+                    pos += width
+                }
+            }
+
+            // 交错复制 V 和 U plane 生成 NV21
+            val uvHeight = height / 2
+            val uvWidth = width / 2
+
+            for (row in 0 until uvHeight) {
+                for (col in 0 until uvWidth) {
+                    val uvIndex = row * uvRowStride + col * uvPixelStride
+                    // NV21: V 在前, U 在后
+                    nv21[pos++] = vBuffer.get(uvIndex)
+                    nv21[pos++] = uBuffer.get(uvIndex)
+                }
+            }
+
+            val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
             val out = ByteArrayOutputStream()
-            yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), 85, out)
+            yuvImage.compressToJpeg(Rect(0, 0, width, height), 85, out)
             val jpegBytes = out.toByteArray()
             out.close()
 

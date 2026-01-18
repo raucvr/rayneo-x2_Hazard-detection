@@ -7,11 +7,14 @@ import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Dns
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.dnsoverhttps.DnsOverHttps
 import java.net.InetAddress
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -25,21 +28,29 @@ class DangerAnalyzer(private val apiKey: String) {
         private const val MODEL = "google/gemini-2.0-flash-001"
     }
 
-    // 自定义 DNS 解析器，绕过系统 DNS 问题
+    // 用于 DoH 的基础 client（无自定义 DNS）
+    private val bootstrapClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .build()
+
+    // Cloudflare DNS-over-HTTPS 作为备用
+    private val dohDns = DnsOverHttps.Builder()
+        .client(bootstrapClient)
+        .url("https://cloudflare-dns.com/dns-query".toHttpUrl())
+        .build()
+
+    // 自定义 DNS 解析器：系统 DNS 优先，失败时使用 DoH
     private val customDns = object : Dns {
         override fun lookup(hostname: String): List<InetAddress> {
             return try {
-                // 首先尝试系统 DNS
                 Dns.SYSTEM.lookup(hostname)
-            } catch (e: Exception) {
-                Log.w(TAG, "System DNS failed, trying hardcoded fallback for $hostname")
-                // 如果系统 DNS 失败，使用硬编码的 IP 地址
-                when (hostname) {
-                    "openrouter.ai" -> listOf(
-                        InetAddress.getByName("104.18.3.115"),
-                        InetAddress.getByName("104.18.2.115")
-                    )
-                    else -> throw e
+            } catch (e: UnknownHostException) {
+                Log.w(TAG, "System DNS failed for $hostname, trying DoH")
+                try {
+                    dohDns.lookup(hostname)
+                } catch (dohError: Exception) {
+                    Log.e(TAG, "DoH also failed for $hostname", dohError)
+                    throw e
                 }
             }
         }
